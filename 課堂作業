@@ -1,0 +1,263 @@
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.GridLayout;
+import java.awt.Image;
+import java.awt.image.BufferedImage;
+import java.awt.image.ConvolveOp;
+import java.awt.image.Kernel;
+import java.io.File;
+import java.io.IOException;
+import javax.imageio.ImageIO;
+import javax.swing.BorderFactory;
+import javax.swing.ImageIcon;
+import javax.swing.JFileChooser;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
+import javax.swing.filechooser.FileNameExtensionFilter;
+
+/**
+ * 核心主程式：Java OOP 卡通濾鏡 (包含高斯平滑優化)
+ */
+public class CartoonFilterProject {
+
+    public static void main(String[] args) {
+        System.out.println("啟動 Java OOP 卡通濾鏡處理程序...");
+
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception e) {
+            System.err.println("無法套用系統外觀，將使用預設外觀。");
+        }
+
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("請選擇要轉換的圖片");
+        fileChooser.setFileFilter(new FileNameExtensionFilter("圖片檔案 (JPG, PNG)", "jpg", "jpeg", "png"));
+
+        int userSelection = fileChooser.showOpenDialog(null);
+
+        if (userSelection == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = fileChooser.getSelectedFile();
+            String inputPath = selectedFile.getAbsolutePath();
+            String outputPath = selectedFile.getParent() + File.separator + "cartoon_" + selectedFile.getName();
+
+            System.out.println("已選擇圖片: " + inputPath);
+
+            try {
+                // 1. 載入圖片
+                BufferedImage originalImage = ImageLoader.load(inputPath);
+                
+                // 2. 實例化處理模組 (參數已針對柔化風格進行微調)
+                ColorQuantizer quantizer = new ColorQuantizer(48); // 色階數：48 讓過渡更自然
+                EdgeDetector edgeDetector = new EdgeDetector(90);  // 閾值：90 配合平滑處理
+
+                // 3. 執行管線處理
+                System.out.println("處理中，請稍候...");
+                
+                // 【步驟一】高斯模糊平滑：消除皮膚雜訊與細紋
+                BufferedImage smoothedImage = ImageSmoother.blur(originalImage);
+
+                // 【步驟二】基於平滑圖進行色彩量化與邊緣檢測
+                BufferedImage quantizedImage = quantizer.process(smoothedImage);
+                BufferedImage edgeImage = edgeDetector.process(smoothedImage);
+                
+                // 【步驟三】融合渲染：合併色塊與輪廓
+                BufferedImage finalImage = ImageRenderer.blend(quantizedImage, edgeImage);
+
+                // 4. 輸出圖片
+                ImageLoader.save(finalImage, outputPath);
+                System.out.println("處理完成！成品已儲存至: " + outputPath);
+
+                // 5. 呼叫 GUI 顯示對比畫面
+                SwingUtilities.invokeLater(() -> {
+                    PreviewWindow window = new PreviewWindow(originalImage, finalImage);
+                    window.setVisible(true);
+                });
+
+            } catch (Exception e) {
+                System.err.println("處理過程中發生錯誤: " + e.getMessage());
+            }
+
+        } else {
+            System.out.println("使用者取消了選擇。程式結束。");
+        }
+    }
+}
+
+/**
+ * 模組 1：影像輸出入管理
+ */
+class ImageLoader {
+    public static BufferedImage load(String path) throws IOException {
+        File file = new File(path);
+        if (!file.exists()) throw new IOException("找不到圖片檔案: " + path);
+        return ImageIO.read(file);
+    }
+
+    public static void save(BufferedImage img, String path) throws IOException {
+        String format = path.toLowerCase().endsWith(".png") ? "png" : "jpg";
+        ImageIO.write(img, format, new File(path));
+    }
+}
+
+/**
+ * 模組 2：影像平滑器 (Gaussian Blur)
+ */
+class ImageSmoother {
+    public static BufferedImage blur(BufferedImage input) {
+        float weight = 1.0f / 16.0f;
+        float[] matrix = {
+            1*weight, 2*weight, 1*weight,
+            2*weight, 4*weight, 2*weight,
+            1*weight, 2*weight, 1*weight
+        };
+        
+        Kernel kernel = new Kernel(3, 3, matrix);
+        ConvolveOp op = new ConvolveOp(kernel, ConvolveOp.EDGE_NO_OP, null);
+        
+        // 執行兩次模糊，效果更好
+        BufferedImage pass1 = op.filter(input, null);
+        return op.filter(pass1, null);
+    }
+}
+
+/**
+ * 模組 3：色彩量化器
+ */
+class ColorQuantizer {
+    private int levelCount;
+    public ColorQuantizer(int levelCount) { this.levelCount = levelCount; }
+
+    public BufferedImage process(BufferedImage input) {
+        int width = input.getWidth(), height = input.getHeight();
+        BufferedImage output = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        int factor = 256 / levelCount;
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                Color c = new Color(input.getRGB(x, y));
+                int r = (c.getRed() / factor) * factor;
+                int g = (c.getGreen() / factor) * factor;
+                int b = (c.getBlue() / factor) * factor;
+                output.setRGB(x, y, new Color(r, g, b).getRGB());
+            }
+        }
+        return output;
+    }
+}
+
+/**
+ * 模組 4：邊緣檢測器 (Sobel Operator)
+ */
+class EdgeDetector {
+    private int threshold;
+    public EdgeDetector(int threshold) { this.threshold = threshold; }
+
+    public BufferedImage process(BufferedImage input) {
+        int width = input.getWidth(), height = input.getHeight();
+        BufferedImage output = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        int[][] gray = new int[width][height];
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                Color c = new Color(input.getRGB(x, y));
+                gray[x][y] = (int) (c.getRed() * 0.299 + c.getGreen() * 0.587 + c.getBlue() * 0.114);
+            }
+        }
+
+        int[][] gx = {{-1, 0, 1}, {-2, 0, 2}, {-1, 0, 1}};
+        int[][] gy = {{-1, -2, -1}, {0, 0, 0}, {1, 2, 1}};
+
+        for (int y = 1; y < height - 1; y++) {
+            for (int x = 1; x < width - 1; x++) {
+                int sumX = 0, sumY = 0;
+                for (int i = -1; i <= 1; i++) {
+                    for (int j = -1; j <= 1; j++) {
+                        int pixel = gray[x + i][y + j];
+                        sumX += pixel * gx[i + 1][j + 1];
+                        sumY += pixel * gy[i + 1][j + 1];
+                    }
+                }
+                int magnitude = (int) Math.sqrt(sumX * sumX + sumY * sumY);
+                if (magnitude > threshold) {
+                    // 使用半透明深灰色，模仿手繪感
+                    output.setRGB(x, y, new Color(50, 50, 50, 180).getRGB());
+                } else {
+                    output.setRGB(x, y, new Color(0, 0, 0, 0).getRGB());
+                }
+            }
+        }
+        return output;
+    }
+}
+
+/**
+ * 模組 5：影像渲染器
+ */
+class ImageRenderer {
+    public static BufferedImage blend(BufferedImage baseImage, BufferedImage edgeMap) {
+        int width = baseImage.getWidth(), height = baseImage.getHeight();
+        BufferedImage combined = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = combined.createGraphics();
+        g.drawImage(baseImage, 0, 0, null);
+        g.drawImage(edgeMap, 0, 0, null);
+        g.dispose();
+        return combined;
+    }
+}
+
+/**
+ * 模組 6：GUI 預覽視窗
+ */
+class PreviewWindow extends JFrame {
+    public PreviewWindow(BufferedImage original, BufferedImage cartoon) {
+        setTitle("Java OOP 卡通濾鏡 - 處理結果對比");
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        
+        setLayout(new GridLayout(1, 2, 10, 0));
+        getContentPane().setBackground(new Color(40, 40, 40)); 
+
+        int targetWidth = 600;
+        ImageIcon originalIcon = scaleImage(original, targetWidth);
+        ImageIcon cartoonIcon = scaleImage(cartoon, targetWidth);
+
+        add(createPanel("原圖 (Original)", originalIcon));
+        add(createPanel("卡通化結果 (Cartoonized)", cartoonIcon));
+
+        pack(); 
+        setLocationRelativeTo(null); 
+    }
+
+    private JPanel createPanel(String titleText, ImageIcon icon) {
+        JPanel panel = new JPanel(new BorderLayout(0, 10));
+        panel.setBackground(new Color(40, 40, 40));
+        panel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
+
+        JLabel titleLabel = new JLabel(titleText, SwingConstants.CENTER);
+        titleLabel.setForeground(Color.WHITE);
+        titleLabel.setFont(new Font("微軟正黑體", Font.BOLD, 18));
+        
+        JLabel imageLabel = new JLabel(icon, SwingConstants.CENTER);
+
+        panel.add(titleLabel, BorderLayout.NORTH);
+        panel.add(new JScrollPane(imageLabel), BorderLayout.CENTER);
+        
+        return panel;
+    }
+
+    private ImageIcon scaleImage(BufferedImage img, int maxWidth) {
+        if (img.getWidth() <= maxWidth) {
+            return new ImageIcon(img);
+        }
+        double ratio = (double) maxWidth / img.getWidth();
+        int newHeight = (int) (img.getHeight() * ratio);
+        Image scaled = img.getScaledInstance(maxWidth, newHeight, Image.SCALE_SMOOTH);
+        return new ImageIcon(scaled);
+    }
+}
